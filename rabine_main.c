@@ -24,6 +24,9 @@ void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);              
 void format_m(mpz_t x, const mpz_t m, const mpz_t n, gmp_randstate_t state);                                    //Format message
 void unformat_m(mpz_t m, const mpz_t x, const mpz_t n);                                                         //Unformat message
 void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);                     //Encryption, message MUST be formatted BEFORE encrypting it
+void RabinDecrypt(mpz_t ciphertext, int c1, int c2);
+void RabinSign();
+void RabinVerify();
 
 int main(){
     RabinPrivate* private = NULL;
@@ -41,6 +44,7 @@ int main(){
     mpz_t some_message;
     mpz_init_set_str(some_message, "48656C6C6F20526162696E21", 16);
     mpz_t initial_x;
+    mpz_init(initial_x);
     format_m(initial_x, some_message, public->n, state);
 
     gmp_printf("Formatted 48656C6C6F20526162696E21 is:\n%ZX", initial_x);
@@ -53,7 +57,7 @@ int main(){
     mpz_init(ciphertext);
     RabinEncrypt(ciphertext, &c_1, &c_2, initial_x, public);
 
-    gmp_printf("\nCiphertext is: %ZX, %d, %d", ciphertext, c_1, c_2);
+    gmp_printf("\nCiphertext is: %ZX, c1 = %d, c2 = %d", ciphertext, c_1, c_2);
 
     mpz_clears(some_message, initial_x, unformatted_m, ciphertext);
     FreeKeys(private, public);
