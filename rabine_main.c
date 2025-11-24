@@ -23,6 +23,7 @@ void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits
 void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);                                              //Clear keys
 void format_m(mpz_t x, const mpz_t m, const mpz_t n, gmp_randstate_t state);                                    //Format message
 void unformat_m(mpz_t m, const mpz_t x, const mpz_t n);                                                         //Unformat message
+void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);                     //Encryption, message MUST be formatted BEFORE encrypting it
 
 int main(){
     RabinPrivate* private = NULL;
@@ -47,9 +48,17 @@ int main(){
     unformat_m(unformatted_m, initial_x, public->n);
 
     gmp_printf("\nUnformatted: %ZX", unformatted_m);
+    mpz_t ciphertext;
+    int c_1, c_2;
+    mpz_init(ciphertext);
+    RabinEncrypt(ciphertext, &c_1, &c_2, initial_x, public);
 
+    gmp_printf("\nCiphertext is: %ZX, %d, %d", ciphertext, c_1, c_2);
+
+    mpz_clears(some_message, initial_x, unformatted_m, ciphertext);
     FreeKeys(private, public);
     gmp_randclear(state);
+
     return 0;
 }
 
@@ -160,4 +169,23 @@ void unformat_m(mpz_t m, const mpz_t x, const mpz_t n) {
     mpz_tdiv_r(m, temp, mask);
     
     mpz_clears(temp, mask, power, NULL);
+}
+//The question is: to format BEFORE ecnryption or INSIDE encryption? :) :) :)
+void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key){
+    mpz_t tmp1, tmp2;
+    //y = x * (x + b) mod n, b = public_key->b, n = public_key->n
+    mpz_inits(tmp1, tmp2, NULL);
+    mpz_mul(y, x, x);
+    mpz_mul(tmp1, x, public_key->b);
+    mpz_add(y, y, tmp1);
+    mpz_mod(y, y, public_key->n);
+    //c1 = ((x+b/2)mod n)mod2
+    mpz_tdiv_q_ui(tmp2, public_key->b, 2);
+    mpz_add(tmp1, x, tmp2); //SAVE TMP1 FOR FURTHER CALCULATIONS
+    mpz_mod(tmp2, tmp1, public_key->n);
+    mpz_mod_ui(tmp2, tmp2, 2);
+    *c1 = mpz_tstbit(tmp2, 0);
+    *c2 = (mpz_jacobi(tmp1, public_key->n) == 1) ? 1 : 0;
+
+    mpz_clears(tmp1, tmp2, NULL);
 }
