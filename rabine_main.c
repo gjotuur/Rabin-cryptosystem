@@ -19,10 +19,23 @@ typedef struct{
     mpz_t b;
 }RabinPrivate; //sole purpose - not to save it as an array
 
+typedef struct{
+    mpz_t m;        //Plain text
+    mpz_t r;        //RNG-based boi
+    mpz_t x;        //Ciphertext we get
+}RabinMessage;      //We`re saving all states of 1 message in 1 struct, just so we can access it whenever we need
+
+//Keys generation
 void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state);       //Generate keys and immediately save them in structure
 void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);                                              //Clear keys
-void format_m(mpz_t x, const mpz_t m, const mpz_t n, gmp_randstate_t state);                                    //Format message
-void unformat_m(mpz_t m, const mpz_t x, const mpz_t n);                                                         //Unformat message
+
+//Message formatting (padding) + usage of struct
+void RabinMessage_init(RabinMessage* m);
+void RabinMessage_clear(RabinMessage* m);
+bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state);                          //Format message, bool to check if it is formatted or no
+bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n);                                                         //Unformat message, same as format with struct
+
+
 void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);                     //Encryption, message MUST be formatted BEFORE encrypting it
 void RabinDecrypt(mpz_t ciphertext, int c1, int c2);
 void RabinSign();
@@ -41,27 +54,25 @@ int main(){
     gmp_printf("Public key:\nn = %ZX\nb = %ZX", public->n, public->b);
     gmp_printf("\nPrivate key:\np = %ZX\nq = %ZX\nb = %ZX\n", private->p, private->q, private->b);
 
-    mpz_t some_message;
-    mpz_init_set_str(some_message, "48656C6C6F20526162696E21", 16);
-    mpz_t initial_x;
-    mpz_init(initial_x);
-    format_m(initial_x, some_message, public->n, state);
+    RabinMessage* message1 = malloc(sizeof(RabinMessage));
+    RabinMessage_init(message1);
 
-    gmp_printf("Formatted 48656C6C6F20526162696E21 is:\n%ZX", initial_x);
-    mpz_t unformatted_m;
-    unformat_m(unformatted_m, initial_x, public->n);
+    mpz_t plaintext;
+    mpz_init_set_str(plaintext, "48656C6C6F20526162696E21", 16);
 
-    gmp_printf("\nUnformatted: %ZX", unformatted_m);
-    mpz_t ciphertext;
-    int c_1, c_2;
-    mpz_init(ciphertext);
-    RabinEncrypt(ciphertext, &c_1, &c_2, initial_x, public);
+    format_m(message1, plaintext, public->n, state);
+    gmp_printf("\nFormatted message 48656C6C6F20526162696E21 with our key is %ZX", message1->x);
 
-    gmp_printf("\nCiphertext is: %ZX, c1 = %d, c2 = %d", ciphertext, c_1, c_2);
+    mpz_t test_y;
+    mpz_init(test_y);
+    int c1, c2;
+    RabinEncrypt(test_y, &c1, &c2, message1->x, public);
+    gmp_printf("\nEncrypted message is %ZX\nc1 is %d\nc2 is %d", test_y, c1, c2);
 
-    mpz_clears(some_message, initial_x, unformatted_m, ciphertext);
+    RabinMessage_clear(message1);
     FreeKeys(private, public);
     gmp_randclear(state);
+    mpz_clears(plaintext, test_y, NULL);
 
     return 0;
 }
@@ -73,6 +84,15 @@ void blum_prime(mpz_t p, int bits, gmp_randstate_t state){
     while(mpz_tdiv_ui(p, 4) != 3){
         mpz_nextprime(p,p);
     }
+}
+
+//Initialize message to fill it with plain- or ciphertext
+void RabinMessage_init(RabinMessage* msg) {
+    mpz_inits(msg->m, msg->r, msg->x, NULL);
+}
+
+void RabinMessage_clear(RabinMessage* msg) {
+    mpz_clears(msg->m, msg->r, msg->x, NULL);
 }
 
 //Generation of b, which is needed for the extended scheme
@@ -122,59 +142,75 @@ void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key){
 }
 
 //Format message. Formula in CP was wrong, but scheme was not => done using scheme, not formula.
-void format_m(mpz_t x, const mpz_t m, const mpz_t n, gmp_randstate_t state){
-    size_t n_bit_length = (mpz_sizeinbase(n, 2) + 7) / 8;
-
-    size_t message_length = (mpz_sizeinbase(m, 2) + 7) / 8;
-    if (message_length > n_bit_length - 10) {
-        fprintf(stderr, "Too long.");
-        return;
+bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state) {
+    size_t l = (mpz_sizeinbase(n, 2) + 7) / 8;
+    size_t m_bytes = (mpz_sizeinbase(m, 2) + 7) / 8;
+    
+    if (mpz_cmp_ui(m, 0) == 0) {
+        m_bytes = 1;
     }
-    //Gen_r
-    mpz_t r, temp, power;
-    mpz_inits(r, temp, power, NULL);
-    mpz_urandomb(r, state, 64);
     
-    mpz_set(x, r);
+    if (m_bytes > (l - 10)) {
+        fprintf(stderr, "Message too long: %zu bytes, max allowed: %zu bytes\n", 
+                m_bytes, l - 10);
+        return false;
+    }
     
-    //+2^64 * m
-    mpz_ui_pow_ui(power, 2, 64);
-    mpz_mul(temp, m, power);
-    mpz_add(x, x, temp);
-    //+255*2^(l-2)
-    mpz_ui_pow_ui(power, 2, 8 * (n_bit_length - 2));
-    mpz_mul_ui(temp, power, 255);
-    mpz_add(x, x, temp);
-    //#remove_kebab
-    mpz_clears(r, temp, power, NULL);
+    mpz_set(msg->m, m);
+    mpz_urandomb(msg->r, state, 64);
+
+    //x = 0x00 || 0xFF || padding || m || r
+    mpz_set(msg->x, msg->r);
+    
+    mpz_t temp;
+    mpz_init(temp);
+    
+    mpz_mul_2exp(temp, msg->m, 64);
+    mpz_add(msg->x, msg->x, temp);
+    
+    mpz_set_ui(temp, 0xFF);
+    mpz_mul_2exp(temp, temp, (l - 2) * 8);
+    mpz_add(msg->x, msg->x, temp);
+    
+    mpz_set_ui(temp, 0x00);
+    mpz_mul_2exp(temp, temp, (l - 1) * 8);
+    mpz_add(msg->x, msg->x, temp);
+    
+    if (mpz_cmp(msg->x, n) >= 0) {
+        fprintf(stderr, "Formatted message >= n\n");
+        mpz_clear(temp);
+        return false;
+    }
+    
+    mpz_clear(temp);
+    return true;
 }
 
 //Not sure it will work, hehe
-void unformat_m(mpz_t m, const mpz_t x, const mpz_t n) {
+bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n) {
     size_t l = (mpz_sizeinbase(n, 2) + 7) / 8;
-    
-    mpz_t temp, mask, power;
-    mpz_inits(temp, mask, power, NULL);
-    
-    mpz_ui_pow_ui(power, 2, 8 * (l - 2));
-    mpz_tdiv_q(temp, x, power);
-    mpz_tdiv_r_ui(temp, temp, 256);
-    
-    if (mpz_cmp_ui(temp, 255) != 0) {
-        fprintf(stderr, "Message was unformatted");
-        mpz_clears(temp, mask, power, NULL);
-        return;
+
+    mpz_t tmp;
+    mpz_init(tmp);
+
+    // High byte == 0xFF ? (ok) : (gtfo ricer)
+    mpz_tdiv_q_2exp(tmp, x, 8 * (l - 1));
+    if (mpz_cmp_ui(tmp, 0xFF) != 0) {
+        fprintf(stderr, "Invalid padding (missing 0xFF)\n");
+        mpz_clear(tmp);
+        return false;
     }
-    
-    mpz_ui_pow_ui(power, 2, 64);
-    mpz_tdiv_q(temp, x, power);
-    
-    mpz_ui_pow_ui(mask, 2, 8 * (l - 10));
-    mpz_tdiv_r(m, temp, mask);
-    
-    mpz_clears(temp, mask, power, NULL);
+
+    mpz_tdiv_r_2exp(tmp, x, 8 * (l - 1));
+
+    mpz_tdiv_q_2exp(m, tmp, 64);
+
+    mpz_clear(tmp);
+    return true;
 }
-//The question is: to format BEFORE ecnryption or INSIDE encryption? :) :) :)
+
+
+//Fuck formatting, fuck padding, fuck everything
 void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key){
     mpz_t tmp1, tmp2;
     //y = x * (x + b) mod n, b = public_key->b, n = public_key->n
