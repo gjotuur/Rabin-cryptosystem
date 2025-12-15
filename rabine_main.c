@@ -27,6 +27,7 @@ typedef struct{
 
 // Keys generation
 void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state);
+void InputKeys(RabinPublic* pub, RabinPrivate* priv, int* key_length);                                                       //memory allocation - outside of func
 void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);
 
 // Message formatting
@@ -44,30 +45,44 @@ bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const Rab
 bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key);
 
 int main(){
-    RabinPrivate* private = NULL;
-    RabinPublic* public = NULL;
+    RabinPrivate* private = malloc(sizeof(RabinPrivate));
+    RabinPublic* public = malloc(sizeof(RabinPublic));
 
     gmp_randstate_t state;
     gmp_randinit_default(state);
     gmp_randseed_ui(state, time(NULL));
 
-    GenerateKeys(&public, &private, 256, state);
-
-    gmp_printf("\n=== КЛЮЧІ ===\n");
+    int keylen;
+    bool sw1;
+    printf("\nAsymCrypto Lab#3: Rabin cryptosystem.\nSo it begins.\nEnter mode: 1 to input keys, 0 to generate keys\nYour answer: ");
+    scanf(" %d", &sw1);
+    getchar();
+    printf("\n");
+    if(sw1){
+        InputKeys(public, private, &keylen);
+    } else {
+        printf("Enter key length");
+        scanf(" %d", &keylen);
+        getchar();
+        printf("\n");
+        GenerateKeys(&public, &private, keylen, state);
+    }
+    
+    gmp_printf("\nCurrent keys\n");
     gmp_printf("Public key:\nn = %Zx\nb = %Zx\n", public->n, public->b);
     gmp_printf("Private key:\np = %Zx\nq = %Zx\nb = %Zx\n", private->p, private->q, private->b);
 
     // Тест шифрування/дешифрування
-    printf("\n=== ТЕСТ ШИФРУВАННЯ/ДЕШИФРУВАННЯ ===\n");
+    printf("\nEncrypt / Decrypt\n");
     RabinMessage* message1 = malloc(sizeof(RabinMessage));
     RabinMessage_init(message1);
 
     mpz_t plaintext;
-    mpz_init_set_str(plaintext, "48656C6C6F20526162696E21", 16); // "Hello Rabin!"
-    gmp_printf("Plaintext: %Zx (Hello Rabin!)\n", plaintext);
+    mpz_init_set_str(plaintext, "76 6c 61 64 79 6b 61 72 65 61 6c 6e 6f 73 74 69", 16); // "vladykarealnosti"
+    gmp_printf("Plaintext: %Zx (vladykarealnosti)\n", plaintext);
 
     if(!format_m(message1, plaintext, public->n, state)) {
-        fprintf(stderr, "Помилка форматування!\n");
+        fprintf(stderr, "Padding error\n");
         return 1;
     }
     gmp_printf("Formatted x: %Zx\n", message1->x);
@@ -78,61 +93,14 @@ int main(){
     RabinEncrypt(ciphertext, &c1, &c2, message1->x, public);
     gmp_printf("Encrypted y: %Zx\nc1=%d, c2=%d\n", ciphertext, c1, c2);
 
-    // Дешифрування
-    mpz_t decrypted_x;
-    mpz_init(decrypted_x);
-    if(RabinDecrypt(decrypted_x, ciphertext, c1, c2, private, public)) {
-        gmp_printf("Decrypted x: %Zx\n", decrypted_x);
-        
-        mpz_t recovered_m;
-        mpz_init(recovered_m);
-        if(unformat_m(recovered_m, decrypted_x, public->n)) {
-            gmp_printf("Recovered m: %Zx\n", recovered_m);
-            if(mpz_cmp(recovered_m, plaintext) == 0) {
-                printf("✓ Дешифрування успішне!\n");
-            } else {
-                printf("✗ Помилка: повідомлення не співпадають\n");
-            }
-        } else {
-            printf("✗ Помилка розформатування\n");
-        }
-        mpz_clear(recovered_m);
-    } else {
-        printf("✗ Помилка дешифрування\n");
-    }
 
-    // Тест підпису
-    printf("\n=== ТЕСТ ПІДПИСУ ===\n");
-    mpz_t signature, test_msg;
-    mpz_inits(signature, test_msg, NULL);
-    mpz_set_str(test_msg, "DEADBEEF", 16);
-    gmp_printf("Message to sign: %Zx\n", test_msg);
-
-    int s1, s2;
-    if(RabinSign(signature, &s1, &s2, test_msg, private, public, state)) {
-        gmp_printf("Signature: %Zx\ns1=%d, s2=%d\n", signature, s1, s2);
-        
-        if(RabinVerify(test_msg, signature, s1, s2, public)) {
-            printf("✓ Підпис валідний!\n");
-        } else {
-            printf("✗ Підпис невалідний\n");
-        }
-        
-        // Тест з неправильним повідомленням
-        mpz_add_ui(test_msg, test_msg, 1);
-        if(!RabinVerify(test_msg, signature, s1, s2, public)) {
-            printf("✓ Підпис правильно відхилено для зміненого повідомлення\n");
-        }
-    } else {
-        printf("✗ Помилка створення підпису\n");
-    }
 
     // Cleanup
     RabinMessage_clear(message1);
     free(message1);
-    FreeKeys(private, public);
+    FreeKeys(NULL, public);
     gmp_randclear(state);
-    mpz_clears(plaintext, ciphertext, decrypted_x, signature, test_msg, NULL);
+    mpz_clears(plaintext, ciphertext, /*decrypted_x signature , test_msg,*/ NULL);
 
     return 0;
 }
@@ -186,6 +154,37 @@ void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits
     mpz_set((*public_key)->b, (*private_key)->b);
 }
 
+//If we want to input it from keyboard - here, use this king
+void InputKeys(RabinPublic* pub, RabinPrivate* priv, int* key_length){
+
+    int keylen;
+    printf("\nEnter key length: ");
+    scanf(" %d", &keylen);
+    getchar();
+    *key_length = keylen;                                       //passed before reassignment
+    keylen /= 4;                                                //reassignment: hex len = bit len / 4
+    printf("\n");
+    char* ext_pub_n = malloc((keylen + 1) * sizeof(char));      //no max len for n
+    char* ext_pub_b = malloc((keylen + 1) * sizeof(char));      //no max len for b
+    printf("Input public key here: ");
+    fgets(ext_pub_n, keylen + 1, stdin);
+    getchar();                                                  //clear buffer
+    printf("Input b from public key here: ");
+    fgets(ext_pub_b, keylen + 1, stdin);
+    getchar();                                                  //clear buffer
+    //clean the input
+    ext_pub_n[strcspn(ext_pub_n, "\n")] = '\0';
+    ext_pub_b[strcspn(ext_pub_b, "\n")] = '\0';
+    //initialize
+    mpz_init_set_str(pub->n, ext_pub_n, 16);                    //only hex is valid
+    mpz_init_set_str(pub->b, ext_pub_b, 16);                    //only hex is valid
+    mpz_init_set(priv->b, pub->b);
+    mpz_inits(priv->p, priv->q, NULL);
+    //Cleanup
+    free(ext_pub_b);
+    free(ext_pub_n);
+}
+
 void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key){
     if(private_key){
         mpz_clears(private_key->p, private_key->q, private_key->b, NULL);
@@ -230,7 +229,6 @@ bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t s
         mpz_clear(temp);
         return false;
     }
-    
     mpz_clear(temp);
     return true;
 }
