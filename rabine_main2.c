@@ -117,15 +117,14 @@ int main(){
     mpz_mul(tmp1488, private_2->p, private_2->q);
     gmp_printf("\nSo we got:\nn = %ZX\nb = %ZX\np*q = %ZX", public_2->n, public_2->b, tmp1488);
     printf("\nPlaintext is 70696470726f7374697270726f73746f7279 (pidprostirprostory)\n");
-    mpz_clear(tmp1488);
 
     //Input server response
-    char* dec_test = malloc(((keylen/4)+2)*sizeof(char)); // +2 для \n та \0
+    char* dec_test = malloc(((keylen/4)+1)*sizeof(char));
     printf("Input encrypted version here: ");
-    if(fgets(dec_test, (keylen/4) + 2, stdin) != NULL) {
-        dec_test[strcspn(dec_test, "\n")] = '\0';
-    }
-
+    fgets(dec_test, (keylen/4) + 1, stdin);
+    getchar();
+    //Clear new ling symbol
+    dec_test[strcspn(dec_test, "\n")] = '\0';
     mpz_set_str(ciphertext2, dec_test, 16);
     free(dec_test);
 
@@ -401,67 +400,76 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     // b_half = b / 2
     mpz_tdiv_q_ui(b_half, b, 2);
 
-    // t = y + b^2/4 mod n
+    // t = y + b^2 / 4 mod n
     mpz_mul(b2, b, b);
     mpz_tdiv_q_ui(b2, b2, 4);
     mpz_add(t, y, b2);
     mpz_mod(t, t, n);
 
-    //blum roots
+    // t mod p, q
+    mpz_t tp, tq;
+    mpz_inits(tp, tq, NULL);
+    mpz_mod(tp, t, p);
+    mpz_mod(tq, t, q);
+
+    // sp = sqrt(t) mod p, sq = sqrt(t) mod q
     mpz_t sp, sq, exp;
     mpz_inits(sp, sq, exp, NULL);
 
-    // sp = t^((p+1)/4) mod p
     mpz_add_ui(exp, p, 1);
     mpz_tdiv_q_ui(exp, exp, 4);
-    mpz_powm(sp, t, exp, p);
+    mpz_powm(sp, tp, exp, p);
 
-    // sq = t^((q+1)/4) mod q
     mpz_add_ui(exp, q, 1);
     mpz_tdiv_q_ui(exp, exp, 4);
-    mpz_powm(sq, t, exp, q);
+    mpz_powm(sq, tq, exp, q);
 
-    //extended GCD using 
-    mpz_t u, v, gcd;
-    mpz_inits(u, v, gcd, NULL);
-    mpz_gcdext(gcd, u, v, p, q);  // GMP вбудована функція
+    // CRT coefficients
+    mpz_t u, v;
+    mpz_inits(u, v, NULL);
 
-    // Чотири корені: s = ±(v*q*sp ± u*p*sq) mod n
-    mpz_t s[4], tmp1, tmp2;
-    mpz_inits(tmp1, tmp2, NULL);
+    mpz_invert(u, p, q); // u = p^{-1} mod q
+    mpz_invert(v, q, p); // v = q^{-1} mod p
+
+    // Four square roots
+    mpz_t s[4];
     for (int i = 0; i < 4; i++)
         mpz_init(s[i]);
 
-    mpz_mul(tmp1, v, q);
-    mpz_mul(tmp1, tmp1, sp);  // v*q*sp
+    // s = ±(sp * q * v ± sq * p * u)
+    mpz_t tmp1, tmp2;
+    mpz_inits(tmp1, tmp2, NULL);
 
-    mpz_mul(tmp2, u, p);
-    mpz_mul(tmp2, tmp2, sq);  // u*p*sq
+    mpz_mul(tmp1, sp, q);
+    mpz_mul(tmp1, tmp1, v);
 
-    mpz_add(s[0], tmp1, tmp2);  // +v*q*sp + u*p*sq
-    mpz_sub(s[1], tmp1, tmp2);  // +v*q*sp - u*p*sq
-    mpz_neg(s[2], s[0]);        // -v*q*sp - u*p*sq
-    mpz_neg(s[3], s[1]);        // -v*q*sp + u*p*sq
+    mpz_mul(tmp2, sq, p);
+    mpz_mul(tmp2, tmp2, u);
+
+    mpz_add(s[0], tmp1, tmp2);
+    mpz_sub(s[1], tmp1, tmp2);
+    mpz_sub(s[2], tmp2, tmp1);
+    mpz_add(s[3], tmp2, tmp1);
 
     for (int i = 0; i < 4; i++) {
         mpz_mod(s[i], s[i], n);
     }
 
-    // Знаходимо правильний корінь за c1 та c2
     bool found = false;
     mpz_t candidate, check;
     mpz_inits(candidate, check, NULL);
 
     for (int i = 0; i < 4; i++) {
-        // candidate = s[i] - b/2 mod n
+        // x = s - b/2 mod n
         mpz_sub(candidate, s[i], b_half);
         mpz_mod(candidate, candidate, n);
 
-        // Перевіряємо c1 та c2
+        // check c1
         mpz_add(check, candidate, b_half);
         mpz_mod(check, check, n);
-        
         int cc1 = mpz_tstbit(check, 0);
+
+        // check c2
         int cc2 = (mpz_jacobi(check, n) == 1) ? 1 : 0;
 
         if (cc1 == c1 && cc2 == c2) {
@@ -471,10 +479,19 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
         }
     }
 
-    // Cleanup
+    // cleanup
     for (int i = 0; i < 4; i++)
         mpz_clear(s[i]);
-    mpz_clears(b_half, b2, t, sp, sq, exp, u, v, gcd, tmp1, tmp2, candidate, check, p, q, n, b, NULL);
+
+    mpz_clears(
+        b_half, b2, t,
+        tp, tq,
+        sp, sq, exp,
+        u, v,
+        tmp1, tmp2,
+        candidate, check,
+        NULL
+    );
 
     return found;
 }
