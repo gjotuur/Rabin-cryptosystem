@@ -203,6 +203,7 @@ int main(){
     return 0;
 }
 
+//Main func for key generation, stable
 void blum_prime(mpz_t p, int bits, gmp_randstate_t state){
     mpz_urandomb(p, state, bits);
     mpz_nextprime(p, p);
@@ -210,15 +211,17 @@ void blum_prime(mpz_t p, int bits, gmp_randstate_t state){
         mpz_nextprime(p,p);
     }
 }
-
+//obvious
 void RabinMessage_init(RabinMessage* msg) {
     mpz_inits(msg->m, msg->r, msg->x, NULL);
 }
 
+//#removekebab
 void RabinMessage_clear(RabinMessage* msg) {
     mpz_clears(msg->m, msg->r, msg->x, NULL);
 }
 
+//Simple as that, 1 func = 1 purpose
 void generate_b(mpz_t b, const mpz_t p, const mpz_t q, const mpz_t n, gmp_randstate_t state){
     mpz_t mod_p, mod_q;
     mpz_init(mod_p);
@@ -237,6 +240,7 @@ void generate_b(mpz_t b, const mpz_t p, const mpz_t q, const mpz_t n, gmp_randst
     mpz_clear(mod_q);
 }
 
+//Keys generation - fully stable, but may fail at the start due to randstate
 void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state){
     *public_key = malloc(sizeof(RabinPublic));
     *private_key = malloc(sizeof(RabinPrivate));
@@ -283,6 +287,7 @@ void InputKeys(RabinPublic* pub, RabinPrivate* priv, int* key_length){
     free(ext_pub_n);
 }
 
+//#remove kebab func
 void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key){
     if(private_key){
         mpz_clears(private_key->p, private_key->q, private_key->b, NULL);
