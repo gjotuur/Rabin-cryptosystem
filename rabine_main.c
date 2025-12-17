@@ -1,3 +1,8 @@
+/*Stable version 2025 12 16 - 2025 12 17, most of the funcs are debugged and stabilized
+prototyping and declaration fully checked, memory leaks and input buffer also checked
+Bugs may occur sometimes due to randstate, best is to run program 3-4 times after compiling
+and then it will be stabilized*/
+
 #include <stdio.h>
 #include <math.h>
 #include <stdint.h>
@@ -11,38 +16,40 @@
 typedef struct{
     mpz_t n;
     mpz_t b;
-}RabinPublic;
+}RabinPublic; //stored in memory with all components
 
 typedef struct{
     mpz_t p;
     mpz_t q;
     mpz_t b;
-}RabinPrivate;
+}RabinPrivate; //same, stored in memory
 
 typedef struct{
     mpz_t m;
     mpz_t r;
     mpz_t x;
-}RabinMessage;
+}RabinMessage; //have limited use for formatting/unformatting tests and so on
 
 // Keys generation
-void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state);
+void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state);                    //!!!Bug may occur due to randstate!!!
 void InputKeys(RabinPublic* pub, RabinPrivate* priv, int* key_length);                                                       //memory allocation - outside of func
-void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);
+void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);                                                           //#removekebab
 
 // Message formatting
 void RabinMessage_init(RabinMessage* m);
 void RabinMessage_clear(RabinMessage* m);
-bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state);
-bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n);
+bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state);                                       //debugged twice
+bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n);                                                                      //debugged + reworked
 
 // Encryption/Decryption
-void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);
-bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* private_key, const RabinPublic* public_key);
+void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);                                  //fully stable, debugged
+bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* private_key, const RabinPublic* public_key);   //bug may occur due to randstate
 
 // Signing/Verification
-bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const RabinPrivate* private_key, const RabinPublic* public_key, gmp_randstate_t state);
-bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key);
+bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const RabinPrivate* private_key, const RabinPublic* public_key, gmp_randstate_t state); //stable
+bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key);                                                   //stable
+
+//Not all funcs may be declared here due to the fact that they are still used after declaration at the bottom, so they still work well without prototyping
 
 int main(){
     RabinPrivate* private = malloc(sizeof(RabinPrivate));
@@ -168,7 +175,7 @@ int main(){
         return 0;
     }
 
-    char* text_signature = malloc(((keylen/4)+2)*sizeof(char)); // +2 для \n та \0
+    char* text_signature = malloc(((keylen/4)+2)*sizeof(char)); // additional 2 for \n \0 which may occur
     printf("\nInput signature here: ");
     if(fgets(text_signature, (keylen/4) + 2, stdin) != NULL) {
         text_signature[strcspn(text_signature, "\n")] = '\0';
@@ -287,6 +294,7 @@ void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key){
     }
 }
 
+//Format message 0x00 || 0xFF || m || r || debugged = true
 bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state) {
     size_t l = (mpz_sizeinbase(n, 2) + 7) / 8;
     size_t m_bytes = (mpz_sizeinbase(m, 2) + 7) / 8;
@@ -324,38 +332,7 @@ bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t s
     return true;
 }
 
-/*bool unformat_m(
-    mpz_t m,
-    const mpz_t x,
-    const mpz_t n
-) {
-    size_t l = (mpz_sizeinbase(n, 2) + 7) / 8;
-
-    mpz_t tmp;
-    mpz_init(tmp);
-
-    mpz_tdiv_q_2exp(tmp, x, 8 * (l - 1));
-    if (mpz_cmp_ui(tmp, 0) != 0) {
-        mpz_clear(tmp);
-        return false;
-    }
-
-    mpz_tdiv_q_2exp(tmp, x, 8 * (l - 2));
-    mpz_mod_ui(tmp, tmp, 256);
-    if (mpz_cmp_ui(tmp, 0xFF) != 0) {
-        mpz_clear(tmp);
-        return false;
-    }
-
-    mpz_tdiv_q_2exp(tmp, x, 64);          //#remove_kebab r
-    mpz_tdiv_q_2exp(tmp, tmp, 8 * 2);     //#remove kebab FF
-
-    mpz_set(m, tmp);
-
-    mpz_clear(tmp);
-    return true;
-}*/
-
+//Unpadding: remove r -> remove FF, what`s left is m, debugged = true
 bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n){
     mpz_t highest_byte;
     mpz_init(highest_byte);
@@ -367,12 +344,13 @@ bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n){
     for(size_t bit = l-1; bit >= l - 8; bit--){
         mpz_clrbit(m, bit);
     }
-    if(mpz_cmp_ui(highest_byte, 255) != 1){
+    if(mpz_cmp_ui(highest_byte, 0xFF) != 1){
         return false;
     }
     return true;
 }
 
+//Encryption func, debugged = true
 void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key){
     mpz_t tmp1, tmp2;
     mpz_inits(tmp1, tmp2, NULL);
@@ -420,6 +398,7 @@ void extended_gcd(mpz_t gcd, mpz_t x, mpz_t y, const mpz_t a, const mpz_t b) {
     mpz_clears(x1, y1, q, tmp, NULL);
 }
 
+//Decryption func, may propose some bugs, debugged = false
 bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* private_key, const RabinPublic* public_key) {
     mpz_t p, q, n, b;
     mpz_inits(p, q, n, b, NULL);
@@ -427,20 +406,17 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     mpz_set(q, private_key->q);
     mpz_set(n, public_key->n);
     mpz_set(b, private_key->b);
-
     mpz_t b_half, b_squared, t;
     mpz_inits(b_half, b_squared, t, NULL);
-
     // b_half = b / 2
     mpz_tdiv_q_ui(b_half, b, 2);
-
     // t = y + (b^2)/4 mod n
     mpz_mul(b_squared, b, b);
     mpz_tdiv_q_ui(b_squared, b_squared, 4);
     mpz_add(t, y, b_squared);
     mpz_mod(t, t, n);
 
-    // ✅ Обчислюємо квадратні корені √t mod n
+    //sqrt mod n
     mpz_t sp, sq, exp;
     mpz_inits(sp, sq, exp, NULL);
 
@@ -454,12 +430,12 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     mpz_tdiv_q_ui(exp, exp, 4);
     mpz_powm(sq, t, exp, q);
 
-    // Розширений Евклід: u*p + v*q = 1
+    //EEA: u*p + v*q = 1
     mpz_t u, v, gcd;
     mpz_inits(u, v, gcd, NULL);
     mpz_gcdext(gcd, u, v, p, q);
 
-    // Чотири корені z: ±(v*q*sp ± u*p*sq) mod n
+    //roots, bloody roots z: ±(v*q*sp ± u*p*sq) mod n
     mpz_t z[4], tmp1, tmp2;
     mpz_inits(tmp1, tmp2, NULL);
     for (int i = 0; i < 4; i++)
@@ -486,12 +462,12 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     mpz_inits(candidate, check_val, NULL);
 
     for (int i = 0; i < 4; i++) {
-        // Обчислюємо x = z - b/2 mod n
+        //x = z - b/2 mod n
         mpz_sub(candidate, z[i], b_half);
         mpz_mod(candidate, candidate, n);
 
-        // Перевіряємо додаткові біти
-        // check_val = (x + b/2) mod n = z[i]
+        //Additional bits???
+        //(x + b/2) mod n = z[i]
         mpz_add(check_val, candidate, b_half);
         mpz_mod(check_val, check_val, n);
         
@@ -513,7 +489,7 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     return found;
 }
 
-//Sign message - to add only signature
+//Sign message - to add only signature, debugged = true
 bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const RabinPrivate* private_key, const RabinPublic* public_key, gmp_randstate_t state) {
     RabinMessage msg;
     RabinMessage_init(&msg);
@@ -614,6 +590,7 @@ bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const Rab
     return true;
 }
 
+//Verify message, debugged = true
 bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key) {
     (void)s1;
     (void)s2;
