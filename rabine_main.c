@@ -150,6 +150,39 @@ int main(){
     unformat_m(un_decrypted, decrypted, public_2->n);
     gmp_printf("\nUnformatted decrypted text: %ZX", un_decrypted);
     printf("\nC1 is %d, C2 is %d", dec_c1, dec_c2);
+
+    mpz_t signature_1;
+    mpz_init(signature_1);
+    int s1,s2;
+    RabinSign(signature_1, &s1, &s2, un_decrypted, private_2, public_2, state);
+    gmp_printf("\nSignature for this message is: %ZX", signature_1);
+
+    if(!sw1){
+        printf("\nVerification unavailable, keys are generated");
+        RabinMessage_clear(message1);
+        free(message1);
+        FreeKeys(private, public);
+        FreeKeys(private_2, public_2);
+        gmp_randclear(state);
+        mpz_clears(plaintext, ciphertext, decrypted, un_decrypted, signature_1, NULL);
+        return 0;
+    }
+
+    char* text_signature = malloc(((keylen/4)+2)*sizeof(char)); // +2 для \n та \0
+    printf("\nInput signature here: ");
+    if(fgets(text_signature, (keylen/4) + 2, stdin) != NULL) {
+        text_signature[strcspn(text_signature, "\n")] = '\0';
+    }
+    mpz_t test_signature;
+    mpz_init_set_str(test_signature, text_signature, 16);
+
+    gmp_printf("\nVerifying for public key\nn = %ZX\nm = %ZX", public->n, un_decrypted);
+    if(RabinVerify(un_decrypted, test_signature, 0, 0, public)){
+        printf("\nVerification: TRUE");
+    } else {
+        printf("\nVerification: FALSE");
+    }
+
     printf("\nThx for using our airlines!\n");
 
     // Cleanup
@@ -158,7 +191,7 @@ int main(){
     FreeKeys(private, public);
     FreeKeys(private_2, public_2);
     gmp_randclear(state);
-    mpz_clears(plaintext, ciphertext, decrypted, un_decrypted, NULL);
+    mpz_clears(plaintext, ciphertext, decrypted, un_decrypted, signature_1, NULL);
 
     return 0;
 }
@@ -212,8 +245,7 @@ void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits
     mpz_set((*public_key)->b, (*private_key)->b);
 }
 
-//If we want to input it from keyboard - here, use this king
-
+//If we want to input it from keyboard - here, use this, king
 void InputKeys(RabinPublic* pub, RabinPrivate* priv, int* key_length){
 
     int keylen;
@@ -390,24 +422,25 @@ void extended_gcd(mpz_t gcd, mpz_t x, mpz_t y, const mpz_t a, const mpz_t b) {
 
 bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* private_key, const RabinPublic* public_key) {
     mpz_t p, q, n, b;
-    mpz_init_set(p, private_key->p);
-    mpz_init_set(q, private_key->q);
-    mpz_init_set(n, public_key->n);
-    mpz_init_set(b, private_key->b);
+    mpz_inits(p, q, n, b, NULL);
+    mpz_set(p, private_key->p);
+    mpz_set(q, private_key->q);
+    mpz_set(n, public_key->n);
+    mpz_set(b, private_key->b);
 
-    mpz_t b_half, b2, t;
-    mpz_inits(b_half, b2, t, NULL);
+    mpz_t b_half, b_squared, t;
+    mpz_inits(b_half, b_squared, t, NULL);
 
     // b_half = b / 2
     mpz_tdiv_q_ui(b_half, b, 2);
 
-    // t = y + b^2/4 mod n
-    mpz_mul(b2, b, b);
-    mpz_tdiv_q_ui(b2, b2, 4);
-    mpz_add(t, y, b2);
+    // t = y + (b^2)/4 mod n
+    mpz_mul(b_squared, b, b);
+    mpz_tdiv_q_ui(b_squared, b_squared, 4);
+    mpz_add(t, y, b_squared);
     mpz_mod(t, t, n);
 
-    //blum roots
+    // ✅ Обчислюємо квадратні корені √t mod n
     mpz_t sp, sq, exp;
     mpz_inits(sp, sq, exp, NULL);
 
@@ -421,16 +454,16 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     mpz_tdiv_q_ui(exp, exp, 4);
     mpz_powm(sq, t, exp, q);
 
-    //extended GCD using 
+    // Розширений Евклід: u*p + v*q = 1
     mpz_t u, v, gcd;
     mpz_inits(u, v, gcd, NULL);
-    mpz_gcdext(gcd, u, v, p, q);  // GMP вбудована функція
+    mpz_gcdext(gcd, u, v, p, q);
 
-    // Чотири корені: s = ±(v*q*sp ± u*p*sq) mod n
-    mpz_t s[4], tmp1, tmp2;
+    // Чотири корені z: ±(v*q*sp ± u*p*sq) mod n
+    mpz_t z[4], tmp1, tmp2;
     mpz_inits(tmp1, tmp2, NULL);
     for (int i = 0; i < 4; i++)
-        mpz_init(s[i]);
+        mpz_init(z[i]);
 
     mpz_mul(tmp1, v, q);
     mpz_mul(tmp1, tmp1, sp);  // v*q*sp
@@ -438,31 +471,32 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     mpz_mul(tmp2, u, p);
     mpz_mul(tmp2, tmp2, sq);  // u*p*sq
 
-    mpz_add(s[0], tmp1, tmp2);  // +v*q*sp + u*p*sq
-    mpz_sub(s[1], tmp1, tmp2);  // +v*q*sp - u*p*sq
-    mpz_neg(s[2], s[0]);        // -v*q*sp - u*p*sq
-    mpz_neg(s[3], s[1]);        // -v*q*sp + u*p*sq
+    mpz_add(z[0], tmp1, tmp2);   // +v*q*sp + u*p*sq
+    mpz_sub(z[1], tmp1, tmp2);   // +v*q*sp - u*p*sq
+    mpz_neg(z[2], z[0]);         // -(+v*q*sp + u*p*sq)
+    mpz_neg(z[3], z[1]);         // -(+v*q*sp - u*p*sq)
 
     for (int i = 0; i < 4; i++) {
-        mpz_mod(s[i], s[i], n);
+        mpz_mod(z[i], z[i], n);
     }
 
-    // Знаходимо правильний корінь за c1 та c2
+    // ✅ x = z - b/2 mod n
     bool found = false;
-    mpz_t candidate, check;
-    mpz_inits(candidate, check, NULL);
+    mpz_t candidate, check_val;
+    mpz_inits(candidate, check_val, NULL);
 
     for (int i = 0; i < 4; i++) {
-        // candidate = s[i] - b/2 mod n
-        mpz_sub(candidate, s[i], b_half);
+        // Обчислюємо x = z - b/2 mod n
+        mpz_sub(candidate, z[i], b_half);
         mpz_mod(candidate, candidate, n);
 
-        // Перевіряємо c1 та c2
-        mpz_add(check, candidate, b_half);
-        mpz_mod(check, check, n);
+        // Перевіряємо додаткові біти
+        // check_val = (x + b/2) mod n = z[i]
+        mpz_add(check_val, candidate, b_half);
+        mpz_mod(check_val, check_val, n);
         
-        int cc1 = mpz_tstbit(check, 0);
-        int cc2 = (mpz_jacobi(check, n) == 1) ? 1 : 0;
+        int cc1 = mpz_tstbit(check_val, 0);
+        int cc2 = (mpz_jacobi(check_val, n) == 1) ? 1 : 0;
 
         if (cc1 == c1 && cc2 == c2) {
             mpz_set(x, candidate);
@@ -473,102 +507,135 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
 
     // Cleanup
     for (int i = 0; i < 4; i++)
-        mpz_clear(s[i]);
-    mpz_clears(b_half, b2, t, sp, sq, exp, u, v, gcd, tmp1, tmp2, candidate, check, p, q, n, b, NULL);
+        mpz_clear(z[i]);
+    mpz_clears(b_half, b_squared, t, sp, sq, exp, u, v, gcd, tmp1, tmp2, candidate, check_val, p, q, n, b, NULL);
 
     return found;
 }
 
+//Sign message - to add only signature
 bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const RabinPrivate* private_key, const RabinPublic* public_key, gmp_randstate_t state) {
     RabinMessage msg;
     RabinMessage_init(&msg);
     
-    // Форматуємо повідомлення
-    if(!format_m(&msg, message, public_key->n, state)) {
+    mpz_t x_formatted;
+    mpz_init(x_formatted);
+    
+    //Max formatting attempts, let`s go
+    int max_attempts = 128;
+    bool is_qr = false;
+    
+    for(int attempt = 0; attempt < max_attempts; attempt++) {
+        //Format message
+        if(!format_m(&msg, message, public_key->n, state)) {
+            RabinMessage_clear(&msg);
+            mpz_clear(x_formatted);
+            return false;
+        }
+        
+        mpz_set(x_formatted, msg.x);
+        
+        //LGNDR, JCB
+        int legendre_p = mpz_legendre(x_formatted, private_key->p);
+        int legendre_q = mpz_legendre(x_formatted, private_key->q);
+        
+        if(legendre_p == 1 && legendre_q == 1) {
+            is_qr = true;
+            break;
+        }
+        //Is not => goto
+    }
+    
+    if(!is_qr) {
+        fprintf(stderr, "Could not find quadratic residue after %d attempts\n", max_attempts);
         RabinMessage_clear(&msg);
+        mpz_clear(x_formatted);
         return false;
     }
     
-    // Підпис - це розв'язок рівняння s(s+b) ≡ x (mod n)
-    // Використовуємо той самий алгоритм що й для дешифрування
-    mpz_t mp, mq, xp, xq, temp, b_half;
-    mpz_inits(mp, mq, xp, xq, temp, b_half, NULL);
+    //quadratic residues
+    mpz_t sp, sq, exp, u, v, gcd;
+    mpz_inits(sp, sq, exp, u, v, gcd, NULL);
+    
+    // sp = x^((p+1)/4) mod p
+    mpz_add_ui(exp, private_key->p, 1);
+    mpz_tdiv_q_ui(exp, exp, 4);
+    mpz_powm(sp, x_formatted, exp, private_key->p);
+    
+    // sq = x^((q+1)/4) mod q
+    mpz_add_ui(exp, private_key->q, 1);
+    mpz_tdiv_q_ui(exp, exp, 4);
+    mpz_powm(sq, x_formatted, exp, private_key->q);
+    
+    //EEA (Bezout) u*p + v*q = 1
+    mpz_gcdext(gcd, u, v, private_key->p, private_key->q);
+    
+    //4 square roots (Kytais`ka theorema pro lyshky tryastsya) s = ±(v*q*sp ± u*p*sq) mod n
+    mpz_t roots[4], tmp1, tmp2;
+    mpz_inits(tmp1, tmp2, NULL);
+    for(int i = 0; i < 4; i++)
+        mpz_init(roots[i]);
+    
+    mpz_mul(tmp1, v, private_key->q);
+    mpz_mul(tmp1, tmp1, sp);  // v*q*sp
+    
+    mpz_mul(tmp2, u, private_key->p);
+    mpz_mul(tmp2, tmp2, sq);  // u*p*sq
+    
+    mpz_add(roots[0], tmp1, tmp2);   // +v*q*sp + u*p*sq
+    mpz_sub(roots[1], tmp1, tmp2);   // +v*q*sp - u*p*sq
+    mpz_neg(roots[2], roots[0]);     // -v*q*sp - u*p*sq
+    mpz_neg(roots[3], roots[1]);     // -v*q*sp + u*p*sq
+    
+    for(int i = 0; i < 4; i++) {
+        mpz_mod(roots[i], roots[i], public_key->n);
+    }
+    
+    //Generate num for choice
+    unsigned long random_choice = gmp_urandomm_ui(state, 4);
+    mpz_set(signature, roots[random_choice]);
+    
+    //We need additional nums?:
+    mpz_t b_half, check;
+    mpz_inits(b_half, check, NULL);
     
     mpz_tdiv_q_ui(b_half, private_key->b, 2);
+    mpz_add(check, signature, b_half);
+    mpz_mod(check, check, public_key->n);
     
-    mpz_mod(xp, msg.x, private_key->p);
-    mpz_mod(xq, msg.x, private_key->q);
+    *s1 = mpz_tstbit(check, 0);
+    *s2 = (mpz_jacobi(check, public_key->n) == 1) ? 1 : 0;
     
-    // mp = xp^((p+1)/4) mod p
-    mpz_add_ui(temp, private_key->p, 1);
-    mpz_tdiv_q_ui(temp, temp, 4);
-    mpz_powm(mp, xp, temp, private_key->p);
-    
-    // mq = xq^((q+1)/4) mod q
-    mpz_add_ui(temp, private_key->q, 1);
-    mpz_tdiv_q_ui(temp, temp, 4);
-    mpz_powm(mq, xq, temp, private_key->q);
-    
-    // CRT
-    mpz_t yp_inv, yq_inv;
-    mpz_inits(yp_inv, yq_inv, NULL);
-    
-    mpz_invert(yp_inv, private_key->p, private_key->q);
-    mpz_invert(yq_inv, private_key->q, private_key->p);
-    
-    mpz_mul(signature, yp_inv, private_key->p);
-    mpz_mul(signature, signature, mq);
-    mpz_mul(temp, yq_inv, private_key->q);
-    mpz_mul(temp, temp, mp);
-    mpz_add(signature, signature, temp);
-    mpz_mod(signature, signature, public_key->n);
-    
-    // Обчислюємо s1 та s2
-    mpz_add(temp, signature, b_half);
-    mpz_mod(temp, temp, public_key->n);
-    *s1 = mpz_tstbit(temp, 0);
-    *s2 = (mpz_jacobi(temp, public_key->n) == 1) ? 1 : 0;
-    
-    mpz_clears(mp, mq, xp, xq, temp, b_half, yp_inv, yq_inv, NULL);
+    // Cleanup
+    for(int i = 0; i < 4; i++)
+        mpz_clear(roots[i]);
+    mpz_clears(sp, sq, exp, u, v, gcd, tmp1, tmp2, b_half, check, x_formatted, NULL);
     RabinMessage_clear(&msg);
-    
     return true;
 }
 
 bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key) {
-    mpz_t computed_y, temp, b_half, formatted_msg;
-    mpz_inits(computed_y, temp, b_half, formatted_msg, NULL);
-    
-    // Обчислюємо y = signature * (signature + b) mod n
-    mpz_mul(computed_y, signature, signature);
-    mpz_mul(temp, signature, public_key->b);
-    mpz_add(computed_y, computed_y, temp);
-    mpz_mod(computed_y, computed_y, public_key->n);
-    
-    // Перевіряємо s1 та s2
-    mpz_tdiv_q_ui(b_half, public_key->b, 2);
-    mpz_add(temp, signature, b_half);
-    mpz_mod(temp, temp, public_key->n);
-    
-    int check_s1 = mpz_tstbit(temp, 0);
-    int check_s2 = (mpz_jacobi(temp, public_key->n) == 1) ? 1 : 0;
-    
-    if(check_s1 != s1 || check_s2 != s2) {
-        mpz_clears(computed_y, temp, b_half, formatted_msg, NULL);
-        return false;
-    }
-    
-    // Розформатовуємо computed_y та порівнюємо з повідомленням
-    mpz_t recovered_msg;
-    mpz_init(recovered_msg);
-    
-    if(!unformat_m(recovered_msg, computed_y, public_key->n)) {
-        mpz_clears(computed_y, temp, b_half, formatted_msg, recovered_msg, NULL);
-        return false;
-    }
-    
-    bool result = (mpz_cmp(recovered_msg, message) == 0);
-    
-    mpz_clears(computed_y, temp, b_half, formatted_msg, recovered_msg, NULL);
-    return result;
+    (void)s1;
+    (void)s2;
+
+    mpz_t x;
+    mpz_init(x);
+
+    // x' = s^2 mod n
+    mpz_mul(x, signature, signature);
+    mpz_mod(x, x, public_key->n);
+
+    // unformat(x') -> m'
+    mpz_t recovered;
+    mpz_init(recovered);
+
+    unformat_m(recovered, x, public_key->n);
+    gmp_printf("\nunpadding issue brother. sorry, current is: %ZX", recovered);
+
+    // m' == m ?
+    bool ok = (mpz_cmp(recovered, message) == 0);
+    gmp_printf("\nJust so we could compare\n%ZX\n%ZX", message, recovered);
+
+    mpz_clears(x, recovered, NULL);
+    return ok;
 }
