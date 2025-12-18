@@ -1,7 +1,11 @@
-/*Stable version 2025 12 16 - 2025 12 17, most of the funcs are debugged and stabilized
+/*Stable version 2025 12 17, all of the funcs are debugged and stabilized
 prototyping and declaration fully checked, memory leaks and input buffer also checked
-Bugs may occur sometimes due to randstate, best is to run program 3-4 times after compiling
-and then it will be stabilized*/
+Decrypt func fully stable, works for every possible len of key without bugs / problems
+Tests:
+256 bit     | passed
+512 bit     | passed
+1024 bit    | passed
+2048 bit    | passed*/
 
 #include <stdio.h>
 #include <math.h>
@@ -299,6 +303,22 @@ void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key){
     }
 }
 
+//Sometimes we need to get most significant byte, so let`s just do it :)
+uint64_t getbyte(const mpz_t x){
+    uint64_t res;
+    size_t bl = mpz_sizeinbase(x, 2);
+    if(bl <= 8){
+        res = mpz_get_ui(x);
+        return res;
+    }
+    mpz_t tmp;
+    mpz_init_set(tmp, x);
+    mpz_tdiv_q_2exp(tmp, tmp, bl - 8);
+    res = mpz_get_ui(tmp);
+
+    return res;
+}
+
 //Format message 0x00 || 0xFF || m || r || debugged = true
 bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state) {
     size_t l = (mpz_sizeinbase(n, 2) + 7) / 8;
@@ -309,8 +329,7 @@ bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t s
     }
     
     if (m_bytes > (l - 10)) {
-        fprintf(stderr, "Message too long: %zu bytes, max allowed: %zu bytes\n", 
-                m_bytes, l - 10);
+        fprintf(stderr, "Message too long: %zu bytes, max allowed: %zu bytes\n", m_bytes, l - 10);
         return false;
     }
     
@@ -366,17 +385,22 @@ void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* p
     mpz_add(y, y, tmp1);
     mpz_mod(y, y, public_key->n);
     
-    // c1 = ((x + b/2) mod n) mod 2
-    mpz_tdiv_q_ui(tmp2, public_key->b, 2);
-    mpz_add(tmp1, x, tmp2);
-    mpz_mod(tmp2, tmp1, public_key->n);
-    mpz_mod_ui(tmp2, tmp2, 2);
-    *c1 = mpz_tstbit(tmp2, 0);
+    // c1 = ((x + b/2) mod n) mod 2!!! b/2 = b * 2 ^ -1 mod n!!!
+    mpz_t inv2, func1;
+    mpz_init_set_ui(func1, (uint64_t)2);
+    mpz_init(inv2);
+    mpz_invert(inv2, func1, public_key->n); //2^-1 !!!
+    mpz_mul(tmp2, public_key->b, inv2);     //b * 2^-1
+    mpz_mod(tmp2, tmp2, public_key->n);     //mod n
+    mpz_add(tmp1, x, tmp2);                 //x + b / 2 or actually x + b * 2^-1
+    mpz_mod(tmp2, tmp1, public_key->n);     //mod n
+    mpz_mod_ui(tmp2, tmp2, 2);              //mod 2
+    *c1 = mpz_tstbit(tmp2, 0);              //finally, dereferencing c1
     
     // c2 = Jacobi(x + b/2, n) == 1 ? 1 : 0
-    *c2 = (mpz_jacobi(tmp1, public_key->n) == 1) ? 1 : 0;
+    *c2 = (mpz_jacobi(tmp1, public_key->n) == 1) ? 1 : 0;       //may not be reduced due to Jacobi symbol properties
 
-    mpz_clears(tmp1, tmp2, NULL);
+    mpz_clears(tmp1, tmp2, inv2, func1, NULL);
 }
 
 //EEA in terms of gmp functions
@@ -413,13 +437,25 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     mpz_set(b, private_key->b);
     mpz_t b_half, b_squared, t;
     mpz_inits(b_half, b_squared, t, NULL);
-    // b_half = b / 2
-    mpz_tdiv_q_ui(b_half, b, 2);
+
+    // b_half = b / 2 = b * 2^-1
+    mpz_t inv2, inv4, func1, func2;
+    mpz_init_set_ui(func1, 2);
+    mpz_init_set_ui(func2, 4);
+    mpz_inits(inv2, inv4, NULL);
+
+    mpz_invert(inv2, func1, n);
+    mpz_invert(inv4, func2, n);
+
+    mpz_mul(b_half, b, inv2);       //b * 2^ (-1)
+    mpz_mod(b_half, b_half, n);     //mod n
     // t = y + (b^2)/4 mod n
     mpz_mul(b_squared, b, b);
-    mpz_tdiv_q_ui(b_squared, b_squared, 4);
+    mpz_mul(b_squared, b_squared, inv4); //directly: b^2 * 4^-1
+    mpz_mod(b_squared, b_squared, n);    //mod n
     mpz_add(t, y, b_squared);
     mpz_mod(t, t, n);
+
 
     //sqrt mod n
     mpz_t sp, sq, exp;
@@ -427,12 +463,12 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
 
     // sp = t^((p+1)/4) mod p
     mpz_add_ui(exp, p, 1);
-    mpz_tdiv_q_ui(exp, exp, 4);
+    mpz_tdiv_q_ui(exp, exp, 4);         //we have blum primes => we can do this operation without 4^-1 and without residue
     mpz_powm(sp, t, exp, p);
 
     // sq = t^((q+1)/4) mod q
     mpz_add_ui(exp, q, 1);
-    mpz_tdiv_q_ui(exp, exp, 4);
+    mpz_tdiv_q_ui(exp, exp, 4);         //we have blum primes => we can do this operation without 4^-1 and without residue
     mpz_powm(sq, t, exp, q);
 
     //EEA: u*p + v*q = 1
@@ -465,31 +501,32 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
     bool found = false;
     mpz_t candidate, check_val;
     mpz_inits(candidate, check_val, NULL);
-
+    uint64_t msb;
     for (int i = 0; i < 4; i++) {
         //x = z - b/2 mod n
         mpz_sub(candidate, z[i], b_half);
         mpz_mod(candidate, candidate, n);
-
         //Additional bits???
         //(x + b/2) mod n = z[i]
         mpz_add(check_val, candidate, b_half);
-        mpz_mod(check_val, check_val, n);
-        
+        mpz_mod(check_val, check_val, n);      
         int cc1 = mpz_tstbit(check_val, 0);
         int cc2 = (mpz_jacobi(check_val, n) == 1) ? 1 : 0;
-
-        if (cc1 == c1 && cc2 == c2) {
+        gmp_printf("\nChecking root: %ZX, c1 = %d, c2 = %d", candidate, cc1, cc2);  
+        msb = getbyte(candidate);
+        if (cc1 == c1 && cc2 == c2 && msb == 255) {         //third condition: correct padding
             mpz_set(x, candidate);
             found = true;
             break;
         }
     }
-
+    if(!found){
+        mpz_set_ui(x, 0ULL);
+        printf("Correct root not found, sorry\n");
+    }
     // Cleanup
-    for (int i = 0; i < 4; i++)
-        mpz_clear(z[i]);
-    mpz_clears(b_half, b_squared, t, sp, sq, exp, u, v, gcd, tmp1, tmp2, candidate, check_val, p, q, n, b, NULL);
+    for (int i = 0; i < 4; i++) mpz_clear(z[i]);
+    mpz_clears(b_half, b_squared, t, sp, sq, exp, u, v, gcd, tmp1, tmp2, candidate, check_val, p, q, n, b, func1, func2, inv2, inv4, NULL);
 
     return found;
 }
