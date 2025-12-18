@@ -9,13 +9,12 @@ Tests:
 
 #include <stdio.h>
 #include <math.h>
-#include <stdint.h>
-#include <time.h>
-#include <string.h>
-#include <stdbool.h>
-#include <time.h>
-#include <stdlib.h>
-#include <gmp.h>
+#include <stdint.h>         //uint64_t used
+#include <time.h>           //random seed
+#include <string.h>         //fgets for mpz_init_set_str
+#include <stdbool.h>        //boolean type funcs
+#include <stdlib.h>         
+#include <gmp.h>            //compiled only with -o ".exe" -lgmp instructions, main lib here
 
 typedef struct{
     mpz_t n;
@@ -35,39 +34,40 @@ typedef struct{
 }RabinMessage; //have limited use for formatting/unformatting tests and so on
 
 // Keys generation
-void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state);                    //!!!Bug may occur due to randstate!!!
+void GenerateKeys(RabinPublic **public_key, RabinPrivate **private_key, int bits, gmp_randstate_t state);                    //Debugged
 void InputKeys(RabinPublic* pub, RabinPrivate* priv, int* key_length);                                                       //memory allocation - outside of func
 void FreeKeys(RabinPrivate* private_key, RabinPublic* public_key);                                                           //#removekebab
 
 // Message formatting
-void RabinMessage_init(RabinMessage* m);
-void RabinMessage_clear(RabinMessage* m);
+void RabinMessage_init(RabinMessage* m);                                                                                     //init func, barely used due to architecture
+void RabinMessage_clear(RabinMessage* m);                                                                                    //clear func with mpz_clears to avoid leaks
 bool format_m(RabinMessage* msg, const mpz_t m, const mpz_t n, gmp_randstate_t state);                                       //debugged twice
 bool unformat_m(mpz_t m, const mpz_t x, const mpz_t n);                                                                      //debugged + reworked
 
 // Encryption/Decryption
-void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);                                  //fully stable, debugged
-bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* private_key, const RabinPublic* public_key);   //bug may occur due to randstate
+void RabinEncrypt(mpz_t y, int* c1, int* c2, const mpz_t x, const RabinPublic* public_key);                                  //Fully stable, debugged, core func
+bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* private_key, const RabinPublic* public_key);   //Fully stable, debugged, core func
 
 // Signing/Verification
-bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const RabinPrivate* private_key, const RabinPublic* public_key, gmp_randstate_t state); //stable
-bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key);                                                   //stable
+bool RabinSign(mpz_t signature, int* s1, int* s2, const mpz_t message, const RabinPrivate* private_key, const RabinPublic* public_key, gmp_randstate_t state); //stable, debugged
+bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, const RabinPublic* public_key);                                                   //stable, debugged
 
 //Not all funcs may be declared here due to the fact that they are still used after declaration at the bottom, so they still work well without prototyping
+//undeclared - gcd, most significant byte + few service funcs used in those prototyped here
 
 int main(){
     RabinPrivate* private = malloc(sizeof(RabinPrivate));
     RabinPublic* public = malloc(sizeof(RabinPublic));
-
+    //RNG, seed = time
     gmp_randstate_t state;
     gmp_randinit_default(state);
     gmp_randseed_ui(state, time(NULL));
-
+    //So program could work with any length of the key
     int keylen;
-    bool sw1;
+    bool sw1;                                           //simple switch - we can understand possible funcs regarding server interactions
     printf("\nAsymCrypto Lab#3: Rabin cryptosystem.\nSo it begins.\nEnter mode: 1 to input keys, 0 to generate keys\nYour answer: ");
     scanf(" %d", &sw1);
-    getchar();
+    getchar();                                          //clear buffer
     printf("\n");
     if(sw1){
         InputKeys(public, private, &keylen);
@@ -78,7 +78,7 @@ int main(){
         printf("\n");
         GenerateKeys(&public, &private, keylen, state);
     }
-    
+    //Debug / Diagnostics
     gmp_printf("\nCurrent keys\n");
     gmp_printf("Public key:\nn = %Zx\nb = %Zx\n", public->n, public->b);
     gmp_printf("Private key:\np = %Zx\nq = %Zx\nb = %Zx\n", private->p, private->q, private->b);
@@ -88,6 +88,7 @@ int main(){
     RabinMessage* message1 = malloc(sizeof(RabinMessage));
     RabinMessage_init(message1);
 
+    //Text input + memory allocation (char*)
     mpz_t plaintext;
     mpz_init_set_str(plaintext, "76 6c 61 64 79 6b 61 72 65 61 6c 6e 6f 73 74 69", 16); // "vladykarealnosti"
     gmp_printf("Plaintext: %Zx (vladykarealnosti)\n", plaintext);
@@ -98,12 +99,14 @@ int main(){
     }
     gmp_printf("Formatted x: %Zx\n", message1->x);
 
+    //Initialize ciphertext and fill it
     mpz_t ciphertext;
     mpz_init(ciphertext);
     int c1, c2;
     RabinEncrypt(ciphertext, &c1, &c2, message1->x, public);
     gmp_printf("Encrypted y: %Zx\nc1=%d, c2=%d\n", ciphertext, c1, c2);
 
+    //___Decryption tests - interaction with server
     printf("Decryption\n");
     mpz_t ciphertext2;
     mpz_init(ciphertext2);
@@ -122,7 +125,7 @@ int main(){
         keylen = keylen2;
     }
     //Generate keys for server
-    GenerateKeys(&public_2, &private_2, keylen, state);
+    GenerateKeys(&public_2, &private_2, keylen, state);                     //Generating keys for the server, so it will encrypt and program will decrypt
     mpz_t tmp1488;
     mpz_init(tmp1488);
     mpz_mul(tmp1488, private_2->p, private_2->q);
@@ -149,7 +152,7 @@ int main(){
     scanf(" %d", &dec_c2);
     getchar();
 
-    //Try to decrypt with our keys
+    //Try to decrypt with our keys (only program knows private key)
     mpz_t decrypted;
     mpz_init(decrypted);
     RabinDecrypt(decrypted, ciphertext2, dec_c1, dec_c2, private_2, public_2);
@@ -162,6 +165,8 @@ int main(){
     gmp_printf("\nUnformatted decrypted text: %ZX", un_decrypted);
     printf("\nC1 is %d, C2 is %d", dec_c1, dec_c2);
 
+    //_____Signature tests: both Sign and Verify
+    //RabinSign test: signed in program, given to server to verify
     mpz_t signature_1;
     mpz_init(signature_1);
     int s1,s2;
@@ -179,6 +184,7 @@ int main(){
         return 0;
     }
 
+    //Verify test: we use keys from server to create signature and then verify it inside of the program
     char* text_signature = malloc(((keylen/4)+2)*sizeof(char)); // additional 2 for \n \0 which may occur
     printf("\nInput signature here: ");
     if(fgets(text_signature, (keylen/4) + 2, stdin) != NULL) {
@@ -194,7 +200,7 @@ int main(){
         printf("\nVerification: FALSE");
     }
 
-    printf("\nThx for using our airlines!\n");
+    printf("\nThx for using our airlines! (Is it Jet2 now???)\n");
 
     // Cleanup
     RabinMessage_clear(message1);
@@ -649,7 +655,7 @@ bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, con
     mpz_init(recovered);
 
     unformat_m(recovered, x, public_key->n);
-    gmp_printf("\nunpadding issue brother. sorry, current is: %ZX", recovered);
+    //gmp_printf("\nunpadding issue brother. sorry, current is: %ZX", recovered);
 
     // m' == m ?
     bool ok = (mpz_cmp(recovered, message) == 0);
@@ -657,4 +663,6 @@ bool RabinVerify(const mpz_t message, const mpz_t signature, int s1, int s2, con
 
     mpz_clears(x, recovered, NULL);
     return ok;
-}
+} //hehe boi, exactly 666)))
+
+//just so it won`t be 666 lines program xD
