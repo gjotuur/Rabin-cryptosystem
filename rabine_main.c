@@ -503,7 +503,7 @@ bool RabinDecrypt(mpz_t x, const mpz_t y, int c1, int c2, const RabinPrivate* pr
         mpz_mod(z[i], z[i], n);
     }
 
-    // ✅ x = z - b/2 mod n
+    //x = z - b/2 mod n
     bool found = false;
     mpz_t candidate, check_val;
     mpz_inits(candidate, check_val, NULL);
